@@ -27,3 +27,4 @@ resource selfHostedGateway 'Microsoft.ApiManagement/service/gateways@2021-08-01'
     }
   }
 }
+
