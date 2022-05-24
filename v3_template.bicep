@@ -203,6 +203,20 @@ resource httpapi 'Microsoft.App/containerApps@2022-03-01' = {
         appProtocol: 'http' 
       }
     }
+      ingress: {
+        external: true
+        targetPort: 80
+        traffic: [
+          {
+            revisionName: 'httpapi--${ContainerApps_HttpApi_CurrentRevisionName}'
+            weight: 80
+          }
+          {
+            latestRevision: true
+            weight: 20
+          }
+        ]
+      }
     template: {
       revisionSuffix: ContainerApps_HttpApi_NewRevisionName
       containers: [
