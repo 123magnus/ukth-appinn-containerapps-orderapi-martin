@@ -2,6 +2,28 @@
 
 The purpose of this repo is to help you quickly get hands-on with Container Apps. It is meant to be consumed either through GitHub codespaces or through a local Dev Container. The idea being that everything you need from tooling to runtimes is already included in the Dev Container so it should be as simple as executing a run command.
 
+## Activities
+  - [Review Scenario](#scenario)
+  - [Review Architecture](#architecture)
+  - [Ensure Pre-requisites](#pre-requisites)
+  - [Getting Started](#getting-started)
+  - [Setup Solution](#setup-solution)
+  - [Deploy version 1 of the application](#deploy-version-1-of-the-application)
+  - [Verify version 1](#verify-version-1)
+  - [Troubleshoot version 1](#troubleshoot-version-1)
+  - [Deploy Version 2](#deploy-version-2)
+  - [Verify Version 2](#verify-version-2)
+  - [Troubleshoot Version 2](#troubleshoot-version-2)
+  - [Deploy version 3](#deploy-version-3)
+  - [Verify version 3](#verify-version-3)
+  - [Deploy version 4](#deploy-version-4)
+  - [Verify version 4](#verify-version-4)
+  - [Deploy version 5](#deploy-version-5)
+  - [Version 6, working with API Management](#version-6-working-with-api-management)
+  - [Version 7, enable authentication](#deploy-version-7)
+  - [Verify version 7](#verify-version-7)
+  - [Cleanup](#cleanup)
+
 ## Scenario
 
 As a retailer, you want your customers to place online orders, while providing them the best online experience. This includes an API to receive orders that is able to scale out and in based on demand. You want to asynchronously store and process the orders using a queing mechanism that also needs to be auto-scaled. With a microservices architecture, Container Apps offer a simple experience that allows your developers focus on the services, and not infrastructure.
@@ -14,8 +36,15 @@ In this sample you will see how to:
 4. Ability to split http traffic when deploying a new version
 5. Ability to configure scaling to meet usage needs
 6. Configure CI/CD deployment to private Azure Container Registry using GitHub Actions
+7. Use API Management with Container Apps.
+8. Enable Authentication for a Container App using Easy Auth.
 
 ![Image of sample application architecture and how messages flow through queue into store](/images/th-arch.png)
+
+## Architecture
+Once this lab is completed you should have an Architecture that looks something like the diagram below.
+
+![](/images/architecture-overview.png)
 
 ## Pre-requisites
 
@@ -179,7 +208,7 @@ You should see a some log entries that will likely contain the same information 
 
 Looks like we have configured the wrong name for the queue. So, we've gone ahead and made the necessary changes to our bicep code [V2 Bicep template](v2_template.bicep) to be used as version 2 of our solution. Let's deploy version 2.
 
-## Deploy Version 2
+## Deploy version 2
 
 We'll repeat the deployment command from earlier, but we've updated our template to use version 2 of the configuration.
 
@@ -222,7 +251,7 @@ curl $storeURL
 > `[{"id":"a85b038a-a01f-4f25-b468-238d0c8a3676","message":"24a1f5ed-2407-4f9d-a6f9-5664436f1c28"},{"id":"f2b4c93a-63e5-4a4d-8a66-1fa4d4b958fe","message":"5940cf24-8c55-4b38-938a-10d9351d5d2b"}]`
 
 Ok, that's some progress but not the messages we sent in the query string. 
-## Troubleshoot Version 2 
+## Troubleshoot version 2 
 Let's take a look at the application code
 
 
@@ -540,7 +569,72 @@ ContainerAppConsoleLogs_CL
 
 Here you should see one row with the text "This is a new log message!".
 
-## Deploy version 6
+
+## Version 6, working with API Management
+
+Now it's time to protect our "httpapi" behind [API Management self hosted gateway (SHGW)](https://docs.microsoft.com/en-us/azure/api-management/self-hosted-gateway-overview). This will be done by: 
+- Create a new Container App "httpapi2" based on the same image used in previous steps.
+- Configure an internal ingress for "httpapi2" Container App. 
+- Create a new Container App "apim" based on an image provided by Microsoft.
+- Configure an external ingress for "apim" Container App.
+- Configure an API, operation in API Management and expose the API inside the SHGW.
+
+First API Management must be created using the Developer sku. (Consumption doesn't support SHGW). This takes 30-45 minutes. 
+
+```bash
+az deployment group create -g $resourceGroup -f apim.bicep -p apiManagementName=${name}-apim
+```
+
+After the script has finished an API Management instance and a SHGW has been created.  
+Go to the API Management instance in Azure portal and click on "Gateways" in the menu. A gateway called "gw-01" has been created. Click on the gateway name --> Deployment --> Copy everything in the field called "Token" and set the variable "gwtoken", the value must be inside "" double quotes. 
+
+Example: gwtoken="GatewayKey gw-01&202206230....."
+ 
+```bash
+gwtoken="[Paste value from the Token field]"
+```
+
+In the Azure portal, go to the resource group you have been working with and locate the name of the storageaccount that has been created. Set the storageaccount variable.   
+
+```bash
+storageaccount=[Enter the name of the storageaccount]
+```
+
+Deploy Container Apps and create API Management configuration. 
+
+```bash
+az deployment group create -g $resourceGroup -f v5_template.bicep -p apiManagementName=${name}-apim containerAppsEnvName=$containerAppEnv storageAccountName=$storageaccount selfHostedGatewayToken="$gwtoken"
+```
+
+Now API Management SHGW has been deployed as a Container App inside of Container Apps and a new Container App called "httpapi2" has been created with an internal ingress which means that is not exposed to the internet.
+
+API Management has protected the API using an API key so this needs to be retrieved. Got to the Azure portal --> Subscriptions --> Choose the bottom row with the scope "Service" --> on the right click the three dots --> Show/hide keys --> Copy the Primary Key value
+
+```bash
+apikey=[Paste the value of the primary key]
+```
+
+Retrieve the url of the SHGW in Container Apps.    
+```bash
+apimURL=https://apim.$(az containerapp env show -g $resourceGroup -n ${name}-env --query 'properties.defaultDomain' -o tsv)/api/data
+```
+
+Add a new order by using HTTP POST and add a header used for authenticate against API Management. 
+```bash
+curl -X POST -H "X-API-Key:$apikey" $apimURL?message=apimitem1
+```
+
+Verify that it works in Log Analytics.
+
+```text
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s has "queuereader" and ContainerName_s has "queuereader"
+| where Log_s has "Message"
+| project TimeGenerated, Log_s
+| order by TimeGenerated desc
+```
+
+## Version 7, enable authentication
 Up until now we have allowed anonymous access to the application. Let's protect the Dashboard App web application with Azure AD authentication using the Easy Auth service built into Container Apps. See [Authentication and authorization in Azure Container Apps](https://docs.microsoft.com/en-us/azure/container-apps/authentication) for additional details
 
 Navigate to the Container Dashboard App in [Azure Portal](https://portal.azure.com) and select the Authentication blade.
@@ -565,9 +659,9 @@ Accept the default values and click "Add"
 
 The Dashboard App is now configured with Azure AD Authentication.
 
-## Verify version 6
+## Verify version 7
 Get the Dashboard URL from the variable stored in a previous step
-```
+``` bash
 echo $dashboardURL
 ```
 
@@ -578,18 +672,22 @@ If you don't have that variable available you can get it via the following comma
 > ```
 
 Open the Url in a browser. You will be prompted for login similar to this
+
 ![](images/easyauth-login.png)
+
 Make sure to select your organizational account if you have several accounts. 
 Select login.
 
 Next you will be presented with a consent dialog. 
+
 ![](images/easyauth-consent.png)
 
 Accept the consent and you will be redirected to the Dashboard App
 
 ![](/images/easyauth-dashboardapp.png)
 
-### Cleanup
+
+## Cleanup
 
 Deleting the Azure resource group should remove everything associated with this demo.
 
